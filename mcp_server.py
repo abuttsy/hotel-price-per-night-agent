@@ -6,6 +6,7 @@
 #   "playwright-stealth",
 #   "python-dotenv",
 #   "httpx",
+#   "starlette",
 # ]
 # ///
 import os
@@ -13,13 +14,27 @@ import asyncio
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from notion_manager import NotionManager
 from scraper import HotelScraper
 from currency_converter import CurrencyConverter
 from email_manager import EmailManager
 
-# Create an MCP server
+# Custom Middleware for Authentication
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        expected_token = os.getenv("CUSTOM_AUTH_TOKEN")
+        if expected_token:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header or auth_header != f"Bearer {expected_token}":
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        return await call_next(request)
+
+# Create an MCP server with custom middleware
+# Note: FastMCP uses starlette under the hood for SSE
 mcp = FastMCP("HotelPriceAutomation")
 
 @mcp.tool()
@@ -128,8 +143,12 @@ if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     if transport == "sse":
         host = os.getenv("MCP_HOST", "0.0.0.0")
-        # Railway and other PaaS usually provide the port in the PORT environment variable
         port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8000")))
+
+        # Access the underlying starlette app to add middleware
+        app = mcp.sse_app
+        app.add_middleware(AuthMiddleware)
+
         mcp.run(transport="sse", host=host, port=port)
     else:
         mcp.run(transport="stdio")

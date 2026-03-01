@@ -4,3 +4,4 @@ playwright-stealth
 python-dotenv
 httpx
 mcp
+starlette
