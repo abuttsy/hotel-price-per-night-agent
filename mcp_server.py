@@ -128,7 +128,8 @@ if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     if transport == "sse":
         host = os.getenv("MCP_HOST", "0.0.0.0")
-        port = int(os.getenv("MCP_PORT", "8000"))
+        # Railway and other PaaS usually provide the port in the PORT environment variable
+        port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8000")))
         mcp.run(transport="sse", host=host, port=port)
     else:
         mcp.run(transport="stdio")
