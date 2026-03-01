@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth
+from playwright_stealth import Stealth
 import re
 
 class HotelScraper:
@@ -59,30 +59,16 @@ class HotelScraper:
         """
         start_date, end_date = self.get_search_dates(region)
 
-        # Note: Fully generic scraping for *any* official hotel website
-        # (each with its own search form and results page) is impossible with a single generic function.
-        # This implementation attempts a best-effort by looking for common price elements
-        # that appear after a page load.
-
         page = await self.browser.new_page()
-        await stealth(page)
+        # Apply stealth using the new Stealth class
+        await Stealth().apply_stealth_async(page)
 
         try:
-            # Most hotel URLs for searching include parameters.
-            # If the URL is just the homepage, we would ideally need a specialized
-            # search logic per hotel brand (e.g., Marriott, Hilton, Accor).
-            # Here we simulate navigating to the URL.
-
-            # Since we can't know every hotel's URL structure, we'll try to look
-            # for a "Book Now" or "Search" pattern if we were doing a full implementation.
-            # For this automation, we assume the provided URL is either a direct link
-            # or a search page where we can try to find pricing.
-
             await page.goto(hotel_url, wait_until="networkidle", timeout=60000)
 
             # Attempt to find currency on the page
             content = await page.content()
-            currency = "EUR" # Default to EUR if found, otherwise USD as fallback
+            currency = "EUR" # Default
             if "$" in content:
                 currency = "USD"
             elif "£" in content:
@@ -90,9 +76,6 @@ class HotelScraper:
             elif "€" in content:
                 currency = "EUR"
 
-            # Look for price patterns
-            # This regex looks for digits possibly separated by commas/dots,
-            # associated with currency symbols.
             price_patterns = [
                 r'€\s?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)',
                 r'\$\s?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)',
@@ -106,14 +89,12 @@ class HotelScraper:
                 matches = re.findall(pattern, content)
                 for match in matches:
                     try:
-                        # Clean price string: remove commas and normalize dots
                         clean_price = match.replace(',', '')
                         found_prices.append(float(clean_price))
                     except ValueError:
                         continue
 
             if found_prices:
-                # Return the minimum found price (lowest rate)
                 return min(found_prices), currency
 
             return None, None

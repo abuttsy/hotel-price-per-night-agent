@@ -11,7 +11,7 @@ class NotionManager:
 
     async def get_hotels_to_update(self) -> List[Dict[str, Any]]:
         """
-        Fetches hotels that either have no 'price last updated' or were updated more than 365 days ago.
+        Fetches hotels that either have no 'Price last updated' or were updated more than 365 days ago.
         """
         hotels = []
         has_more = True
@@ -22,13 +22,13 @@ class NotionManager:
         query_filter = {
             "or": [
                 {
-                    "property": "price last updated",
+                    "property": "Price last updated",
                     "date": {
                         "is_empty": True
                     }
                 },
                 {
-                    "property": "price last updated",
+                    "property": "Price last updated",
                     "date": {
                         "before": one_year_ago
                     }
@@ -37,10 +37,13 @@ class NotionManager:
         }
 
         while has_more:
-            response = await self.notion.databases.query(
-                database_id=self.database_id,
-                filter=query_filter,
-                start_cursor=start_cursor
+            response = await self.notion.request(
+                path=f"databases/{self.database_id.replace('-', '')}/query",
+                method="POST",
+                body={
+                    "filter": query_filter,
+                    "start_cursor": start_cursor
+                } if start_cursor else {"filter": query_filter}
             )
             hotels.extend(response.get("results", []))
             has_more = response.get("has_more", False)
@@ -50,14 +53,14 @@ class NotionManager:
 
     async def update_hotel_price(self, page_id: str, price: float, currency: str = "EUR"):
         """
-        Updates the '💶 Price/night starts at' and 'price last updated' properties.
+        Updates the '💶 Price/night starts at' and 'Price last updated' properties.
         """
         now = datetime.now().strftime("%Y-%m-%d")
         properties = {
             "💶 Price/night starts at": {
                 "number": price
             },
-            "price last updated": {
+            "Price last updated": {
                 "date": {
                     "start": now
                 }
@@ -71,21 +74,15 @@ class NotionManager:
         """
         props = hotel_page.get("properties", {})
 
-        # Assuming 'Name' is the title property
-        name_prop = props.get("Name", {}).get("title", [])
+        # '🏨 Hotel Name' is the title property
+        name_prop = props.get("🏨 Hotel Name", {}).get("title", [])
         name = name_prop[0].get("plain_text") if name_prop else "Unknown"
 
-        # Assuming 'URL' is a url property
-        url = props.get("URL", {}).get("url")
+        # 'Website' is the url property
+        url = props.get("Website", {}).get("url")
 
-        # Assuming 'Region' is a select or multi-select property
-        region_prop = props.get("Region", {})
+        # Region extraction (relation or rollup might be complex, default to "" for now)
         region = ""
-        if region_prop.get("type") == "select":
-            region = region_prop.get("select", {}).get("name", "")
-        elif region_prop.get("type") == "multi_select":
-            regions = [r.get("name") for r in region_prop.get("multi_select", [])]
-            region = regions[0] if regions else ""
 
         # Current price for comparison
         current_price = props.get("💶 Price/night starts at", {}).get("number")
