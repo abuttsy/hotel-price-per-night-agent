@@ -13,15 +13,29 @@
 import os
 import asyncio
 import re
+import logging
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 import uvicorn
 
 from notion_manager import NotionManager
 from scraper import HotelScraper
 from currency_converter import CurrencyConverter
 from email_manager import EmailManager
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("mcp_server")
+
+# Logging Middleware to debug headers
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        host = request.headers.get("host")
+        logger.info(f"Request: {request.method} {request.url.path} - Host: {host}")
+        return await call_next(request)
 
 # Create an MCP server
 mcp = FastMCP("HotelPriceAutomation")
@@ -60,7 +74,6 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
     try:
         if hotel_url:
             # Extract page ID from Notion URL if possible
-            # Example: https://www.notion.so/Quellenhof-f7997be9b6d044f2bc378b54f679dc13
             match = re.search(r'([a-f0-9]{32})', hotel_url)
             if match:
                 page_id = match.group(1)
@@ -92,7 +105,6 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
         await scraper.start()
 
         for hotel_page in hotels_to_update:
-            # Skip if it's not a page
             if hotel_page.get("object") != "page":
                 continue
 
@@ -106,12 +118,12 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
                 results_summary.append(f"Skipped {name}: No official website URL found in Notion.")
                 continue
 
-            print(f"Processing {name} ({website})...")
+            logger.info(f"Processing {name} ({website})...")
             price, currency = await scraper.get_price(website, region)
 
             if price is not None:
                 new_price_eur = await converter.convert_to_eur(price, currency)
-                print(f"New price: {new_price_eur:.2f} EUR")
+                logger.info(f"New price: {new_price_eur:.2f} EUR")
                 await notion_mgr.update_hotel_price(hotel_page["id"], new_price_eur)
 
                 if current_price is not None:
@@ -130,18 +142,21 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
     return "\n".join(results_summary) if results_summary else "No updates performed."
 
 if __name__ == "__main__":
-    # Check for transport type in environment variable, default to stdio
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     if transport == "sse":
         host = os.getenv("MCP_HOST", "0.0.0.0")
         port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8080")))
 
-        # Access the underlying starlette app
         starlette_app = mcp.sse_app
         if callable(starlette_app):
             starlette_app = starlette_app()
 
-        # Run without AuthMiddleware as requested
+        # Add middlewares
+        starlette_app.add_middleware(LoggingMiddleware)
+        # Allow all hosts to avoid 421/400 errors
+        starlette_app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+
+        logger.info(f"Starting SSE server on {host}:{port}")
         uvicorn.run(starlette_app, host=host, port=port)
     else:
         mcp.run(transport="stdio")
