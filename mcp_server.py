@@ -7,6 +7,7 @@
 #   "python-dotenv",
 #   "httpx",
 #   "starlette",
+#   "uvicorn",
 # ]
 # ///
 import os
@@ -14,10 +15,9 @@ import asyncio
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
-from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from starlette.applications import Starlette
+import uvicorn
 
 from notion_manager import NotionManager
 from scraper import HotelScraper
@@ -141,23 +141,18 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
     return "\n".join(results_summary) if results_summary else "No updates performed."
 
 if __name__ == "__main__":
+    # Check for transport type in environment variable, default to stdio
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     if transport == "sse":
-        # Force the host to 0.0.0.0 so Railway can see it
-        # Ensure it pulls the port Railway provides dynamically
-        port = int(os.getenv("PORT", 8080)) 
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
-    else:
-        mcp.run(transport="stdio")
-        
+        host = os.getenv("MCP_HOST", "0.0.0.0")
+        port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8000")))
+
         # FastMCP.sse_app is a property that returns a Starlette app
-        # We need to access it properly
         starlette_app = mcp.sse_app
         if callable(starlette_app):
             starlette_app = starlette_app()
         starlette_app.add_middleware(AuthMiddleware)
 
-        import uvicorn
         uvicorn.run(starlette_app, host=host, port=port)
     else:
         mcp.run(transport="stdio")
