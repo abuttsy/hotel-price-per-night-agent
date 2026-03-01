@@ -1,0 +1,5 @@
+notion-client
+playwright
+playwright-stealth
+python-dotenv
+httpx
