@@ -12,29 +12,16 @@
 # ///
 import os
 import asyncio
+import re
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
 import uvicorn
 
 from notion_manager import NotionManager
 from scraper import HotelScraper
 from currency_converter import CurrencyConverter
 from email_manager import EmailManager
-
-# Custom Middleware for Authentication
-class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        # We only want to authenticate the /sse and /messages endpoints used by MCP
-        if request.url.path in ["/sse", "/messages"]:
-            expected_token = os.getenv("CUSTOM_AUTH_TOKEN")
-            if expected_token:
-                auth_header = request.headers.get("Authorization")
-                if not auth_header or auth_header != f"Bearer {expected_token}":
-                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
-        return await call_next(request)
 
 # Create an MCP server
 mcp = FastMCP("HotelPriceAutomation")
@@ -46,7 +33,7 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
 
     Args:
         hotel_name: The name of the hotel to update (searches Notion).
-        hotel_url: The official website URL of the hotel (searches Notion).
+        hotel_url: The Notion page URL (database row URL) of the hotel.
 
     If both or either are provided, only matching hotels are updated.
     Otherwise, all hotels needing updates are processed.
@@ -72,19 +59,21 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
 
     try:
         if hotel_url:
-            # Query by URL
-            query_filter = {
-                "property": "Website",
-                "url": {
-                    "equals": hotel_url
-                }
-            }
-            response = await notion_mgr.notion.request(
-                path=f"databases/{database_id.replace('-', '')}/query",
-                method="POST",
-                body={"filter": query_filter}
-            )
-            hotels_to_update = response.get("results", [])
+            # Extract page ID from Notion URL if possible
+            # Example: https://www.notion.so/Quellenhof-f7997be9b6d044f2bc378b54f679dc13
+            match = re.search(r'([a-f0-9]{32})', hotel_url)
+            if match:
+                page_id = match.group(1)
+                try:
+                    response = await notion_mgr.notion.request(
+                        path=f"pages/{page_id}",
+                        method="GET"
+                    )
+                    hotels_to_update = [response]
+                except Exception as e:
+                    return f"Error fetching Notion page from URL: {str(e)}"
+            else:
+                return f"Could not extract a valid page ID from the provided hotel_url: {hotel_url}"
         elif hotel_name:
             # Query by search (best effort)
             response = await notion_mgr.notion.request(
@@ -109,16 +98,16 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
 
             hotel_data = notion_mgr.extract_hotel_data(hotel_page)
             name = hotel_data["name"]
-            url = hotel_data["url"]
+            website = hotel_data["url"]
             region = "Europe" # Default logic
             current_price = hotel_data["current_price"]
 
-            if not url:
-                results_summary.append(f"Skipped {name}: No URL found in Notion.")
+            if not website:
+                results_summary.append(f"Skipped {name}: No official website URL found in Notion.")
                 continue
 
-            print(f"Processing {name} ({url})...")
-            price, currency = await scraper.get_price(url, region)
+            print(f"Processing {name} ({website})...")
+            price, currency = await scraper.get_price(website, region)
 
             if price is not None:
                 new_price_eur = await converter.convert_to_eur(price, currency)
@@ -145,14 +134,14 @@ if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     if transport == "sse":
         host = os.getenv("MCP_HOST", "0.0.0.0")
-        port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8000")))
+        port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8080")))
 
-        # FastMCP.sse_app is a property that returns a Starlette app
+        # Access the underlying starlette app
         starlette_app = mcp.sse_app
         if callable(starlette_app):
             starlette_app = starlette_app()
-        starlette_app.add_middleware(AuthMiddleware)
 
+        # Run without AuthMiddleware as requested
         uvicorn.run(starlette_app, host=host, port=port)
     else:
         mcp.run(transport="stdio")
