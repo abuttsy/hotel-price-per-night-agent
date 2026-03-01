@@ -1,3 +1,13 @@
+# /// script
+# dependencies = [
+#   "mcp",
+#   "notion-client",
+#   "playwright",
+#   "playwright-stealth",
+#   "python-dotenv",
+#   "httpx",
+# ]
+# ///
 import os
 import asyncio
 from typing import Optional
@@ -13,10 +23,15 @@ from email_manager import EmailManager
 mcp = FastMCP("HotelPriceAutomation")
 
 @mcp.tool()
-async def run_jules_script(hotel_name: Optional[str] = None) -> str:
+async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional[str] = None) -> str:
     """
     Runs the hotel price update automation.
-    If hotel_name is provided, only that specific hotel is updated.
+
+    Args:
+        hotel_name: The name of the hotel to update (searches Notion).
+        hotel_url: The official website URL of the hotel (searches Notion).
+
+    If both or either are provided, only matching hotels are updated.
     Otherwise, all hotels needing updates are processed.
     """
     load_dotenv()
@@ -36,10 +51,25 @@ async def run_jules_script(hotel_name: Optional[str] = None) -> str:
     email_mgr = EmailManager(email_sender, email_password, email_receiver)
 
     results_summary = []
+    hotels_to_update = []
 
     try:
-        if hotel_name:
-            # Update a specific hotel
+        if hotel_url:
+            # Query by URL
+            query_filter = {
+                "property": "Website",
+                "url": {
+                    "equals": hotel_url
+                }
+            }
+            response = await notion_mgr.notion.request(
+                path=f"databases/{database_id.replace('-', '')}/query",
+                method="POST",
+                body={"filter": query_filter}
+            )
+            hotels_to_update = response.get("results", [])
+        elif hotel_name:
+            # Query by search (best effort)
             response = await notion_mgr.notion.request(
                 path="search",
                 method="POST",
@@ -51,11 +81,15 @@ async def run_jules_script(hotel_name: Optional[str] = None) -> str:
             hotels_to_update = await notion_mgr.get_hotels_to_update()
 
         if not hotels_to_update:
-            return "No hotels found needing update."
+            return "No matching hotels found needing update."
 
         await scraper.start()
 
         for hotel_page in hotels_to_update:
+            # Skip if it's not a page
+            if hotel_page.get("object") != "page":
+                continue
+
             hotel_data = notion_mgr.extract_hotel_data(hotel_page)
             name = hotel_data["name"]
             url = hotel_data["url"]
@@ -63,14 +97,16 @@ async def run_jules_script(hotel_name: Optional[str] = None) -> str:
             current_price = hotel_data["current_price"]
 
             if not url:
-                results_summary.append(f"Skipped {name}: No URL.")
+                results_summary.append(f"Skipped {name}: No URL found in Notion.")
                 continue
 
+            print(f"Processing {name} ({url})...")
             price, currency = await scraper.get_price(url, region)
 
             if price is not None:
                 new_price_eur = await converter.convert_to_eur(price, currency)
-                await notion_mgr.update_hotel_price(hotel_data["id"], new_price_eur)
+                print(f"New price: {new_price_eur:.2f} EUR")
+                await notion_mgr.update_hotel_price(hotel_page["id"], new_price_eur)
 
                 if current_price is not None:
                     email_mgr.send_price_alert(name, current_price, new_price_eur)
@@ -80,7 +116,8 @@ async def run_jules_script(hotel_name: Optional[str] = None) -> str:
                 results_summary.append(f"Failed to scrape {name}")
 
     except Exception as e:
-        return f"An error occurred: {str(e)}"
+        import traceback
+        return f"An error occurred: {str(e)}\n{traceback.format_exc()}"
     finally:
         await scraper.stop()
 
