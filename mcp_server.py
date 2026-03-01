@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.applications import Starlette
 
 from notion_manager import NotionManager
 from scraper import HotelScraper
@@ -26,15 +27,16 @@ from email_manager import EmailManager
 # Custom Middleware for Authentication
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        expected_token = os.getenv("CUSTOM_AUTH_TOKEN")
-        if expected_token:
-            auth_header = request.headers.get("Authorization")
-            if not auth_header or auth_header != f"Bearer {expected_token}":
-                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        # We only want to authenticate the /sse and /messages endpoints used by MCP
+        if request.url.path in ["/sse", "/messages"]:
+            expected_token = os.getenv("CUSTOM_AUTH_TOKEN")
+            if expected_token:
+                auth_header = request.headers.get("Authorization")
+                if not auth_header or auth_header != f"Bearer {expected_token}":
+                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return await call_next(request)
 
-# Create an MCP server with custom middleware
-# Note: FastMCP uses starlette under the hood for SSE
+# Create an MCP server
 mcp = FastMCP("HotelPriceAutomation")
 
 @mcp.tool()
@@ -145,10 +147,14 @@ if __name__ == "__main__":
         host = os.getenv("MCP_HOST", "0.0.0.0")
         port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8000")))
 
-        # Access the underlying starlette app to add middleware
-        app = mcp.sse_app
-        app.add_middleware(AuthMiddleware)
+        # FastMCP.sse_app is a property that returns a Starlette app
+        # We need to access it properly
+        starlette_app = mcp.sse_app
+        if callable(starlette_app):
+            starlette_app = starlette_app()
+        starlette_app.add_middleware(AuthMiddleware)
 
-        mcp.run(transport="sse", host=host, port=port)
+        import uvicorn
+        uvicorn.run(starlette_app, host=host, port=port)
     else:
         mcp.run(transport="stdio")
