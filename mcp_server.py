@@ -124,4 +124,11 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
     return "\n".join(results_summary) if results_summary else "No updates performed."
 
 if __name__ == "__main__":
-    mcp.run(transport='stdio')
+    # Check for transport type in environment variable, default to stdio
+    transport = os.getenv("MCP_TRANSPORT", "stdio")
+    if transport == "sse":
+        host = os.getenv("MCP_HOST", "0.0.0.0")
+        port = int(os.getenv("MCP_PORT", "8000"))
+        mcp.run(transport="sse", host=host, port=port)
+    else:
+        mcp.run(transport="stdio")
