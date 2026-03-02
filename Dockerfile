@@ -45,6 +45,8 @@ ENV EMAIL_SENDER=""
 ENV EMAIL_PASSWORD=""
 ENV EMAIL_RECEIVER="ultimatefamilyhotels@gmail.com"
 ENV MCP_TRANSPORT="stdio"
+# Ensure uvicorn uses the right proxy settings if needed
+ENV FORWARDED_ALLOW_IPS="*"
 
 # Command to run the MCP server
 CMD ["python", "mcp_server.py"]

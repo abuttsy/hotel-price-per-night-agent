@@ -19,6 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.applications import Starlette
 import uvicorn
 
 from notion_manager import NotionManager
@@ -34,8 +35,10 @@ logger = logging.getLogger("mcp_server")
 class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         host = request.headers.get("host")
-        logger.info(f"Request: {request.method} {request.url.path} - Host: {host}")
-        return await call_next(request)
+        logger.info(f"Incoming Request: {request.method} {request.url.path} - Host: {host}")
+        response = await call_next(request)
+        logger.info(f"Response Status: {response.status_code}")
+        return response
 
 # Create an MCP server
 mcp = FastMCP("HotelPriceAutomation")
@@ -48,9 +51,6 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
     Args:
         hotel_name: The name of the hotel to update (searches Notion).
         hotel_url: The Notion page URL (database row URL) of the hotel.
-
-    If both or either are provided, only matching hotels are updated.
-    Otherwise, all hotels needing updates are processed.
     """
     load_dotenv()
 
@@ -73,7 +73,6 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
 
     try:
         if hotel_url:
-            # Extract page ID from Notion URL if possible
             match = re.search(r'([a-f0-9]{32})', hotel_url)
             if match:
                 page_id = match.group(1)
@@ -88,7 +87,6 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
             else:
                 return f"Could not extract a valid page ID from the provided hotel_url: {hotel_url}"
         elif hotel_name:
-            # Query by search (best effort)
             response = await notion_mgr.notion.request(
                 path="search",
                 method="POST",
@@ -96,7 +94,6 @@ async def run_jules_script(hotel_name: Optional[str] = None, hotel_url: Optional
             )
             hotels_to_update = [h for h in response.get("results", []) if h.get("object") == "page"]
         else:
-            # Update all hotels needing update
             hotels_to_update = await notion_mgr.get_hotels_to_update()
 
         if not hotels_to_update:
@@ -147,16 +144,18 @@ if __name__ == "__main__":
         host = os.getenv("MCP_HOST", "0.0.0.0")
         port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8080")))
 
+        # Explicitly get or create the starlette app
         starlette_app = mcp.sse_app
         if callable(starlette_app):
             starlette_app = starlette_app()
 
-        # Add middlewares
-        starlette_app.add_middleware(LoggingMiddleware)
-        # Allow all hosts to avoid 421/400 errors
-        starlette_app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+        # Ensure it's a Starlette instance before adding middleware
+        if isinstance(starlette_app, Starlette):
+            starlette_app.add_middleware(LoggingMiddleware)
+            starlette_app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 
         logger.info(f"Starting SSE server on {host}:{port}")
-        uvicorn.run(starlette_app, host=host, port=port)
+        # proxy_headers=True is important for Railway's edge
+        uvicorn.run(starlette_app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*")
     else:
         mcp.run(transport="stdio")
